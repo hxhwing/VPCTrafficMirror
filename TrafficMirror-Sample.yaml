@@ -1,0 +1,666 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: This CloudFormation Template can be used to quickly get started with VPC Traffic Mirroring and Open Source IDS Suricata by configuring an environment to view IDS alerts through Elasticsearch.
+
+Parameters:
+  ResourceName:
+    Type: String
+    Default: TrafficMirror-Sample
+    # AllowedValues:
+    #   - TrafficMirror-Sample
+    Description: 'Prefix for the resources that are created.'
+
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    ConstraintDescription: This must be the name of an existing EC2 KeyPair.
+    Description: 'Name of an existing EC2 KeyPair to enable SSH access to the instances created in this scenario.'
+
+  # KibanaUsername:
+  #   Type: String
+  #   #Default: admin
+  #   Description: 'Username of Elasticsearch Kibana administrator'
+
+  # KibanaPassword:
+  #   Type: String
+  #   #Default: P@ssw0rd
+  #   Description: 'Password of Elasticsearch Kibana administrator'
+
+  # DomainName:
+  #   Description: User defined Elasticsearch Domain name
+  #   Type: String
+  #   Default: TrafficMirror-Sample
+
+
+Mappings:
+  RegionMap:
+    ap-east-1:
+      "64": ami-8380faf2
+    ap-northeast-1:
+      "64": ami-02be181636ed95ac5
+    ap-northeast-2:
+      "64": ami-004b3430b806f3b1a
+    ap-northeast-3:
+      "64": ami-0166a1a40f68b6afc
+    ap-southeast-1:
+      "64": ami-08b3278ea6e379084
+    ap-southeast-2:
+      "64": ami-00d7116c396e73b04
+    me-south-1:
+      "64": ami-0aff4c97b2c0968e0
+    ap-south-1:
+      "64": ami-0f59afa4a22fad2f0
+    ca-central-1:
+      "64": ami-0062c497b55437b01
+    eu-central-1:
+      "64": ami-0410f42dd64e525be
+    eu-north-1:
+      "64": ami-0ca3b50bc99a41773
+    eu-west-1:
+      "64": ami-0987ee37af7792903
+    eu-west-2:
+      "64": ami-05945867d79b7d926
+    eu-west-3:
+      "64": ami-00c60f4df93ff408e
+    sa-east-1:
+      "64": ami-0fb487b6f6ab53ff4
+    us-east-1:
+      "64": ami-09f9d773751b9d606
+    us-east-2:
+      "64": ami-0891395d749676c2e
+    us-west-1:
+      "64": ami-0c0e5a396959508b0
+    us-west-2:
+      "64": ami-0bbe9b07c5fe8e86e
+    af-south-1:
+      "64": ami-0085c012349ac73b1
+
+
+Resources:
+
+####Create Traffic Mirror Demo VPC#####
+
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.66.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Ref ResourceName
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Ref ResourceName
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId:
+        Ref: InternetGateway
+      VpcId: !Ref VPC
+  RouteTable:
+    DependsOn:
+      - VPC
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Ref ResourceName
+      VpcId: !Ref VPC
+  PublicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref RouteTable
+  Subnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock: 10.66.0.0/24
+      AvailabilityZone: 
+        Fn::Select: 
+          - 0
+          - Fn::GetAZs: ""
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Ref ResourceName
+      VpcId: !Ref VPC
+  SubnetAssoc:
+    DependsOn:
+      - Subnet
+      - RouteTable
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref RouteTable
+      SubnetId: !Ref Subnet
+  Subnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock: 10.66.1.0/24
+      AvailabilityZone: 
+        Fn::Select: 
+          - 1
+          - Fn::GetAZs: ""
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Ref ResourceName
+      VpcId: !Ref VPC
+  SubnetAssoc1:
+    DependsOn:
+      - Subnet1
+      - RouteTable
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref RouteTable
+      SubnetId: !Ref Subnet1
+  PublicNACL:
+    Type: AWS::EC2::NetworkAcl
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Ref ResourceName
+        - Key: Network
+          Value: Public
+  InboundPublicNACLEntry:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref PublicNACL
+      RuleNumber: 100
+      Protocol: -1
+      RuleAction: allow
+      Egress: false
+      CidrBlock: "0.0.0.0/0"
+      PortRange:
+        From: 0
+        To: 65535
+  OutboundPublicNACLEntry:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref PublicNACL
+      RuleNumber: 100
+      Protocol: -1
+      RuleAction: allow
+      Egress: true
+      CidrBlock: 0.0.0.0/0
+      PortRange:
+        From: 0
+        To: 65535
+  SubnetNACLAssociation:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId: !Ref Subnet
+      NetworkAclId: !Ref PublicNACL
+  SourceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: TrafficMirror-SourceSG
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: "22"
+          ToPort: "22"
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: "80"
+          ToPort: "80"
+          CidrIp: 0.0.0.0/0
+  TargetSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: TrafficMirror-TargetSG
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: "22"
+          ToPort: "22"
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: udp
+          FromPort: "4789"
+          ToPort: "4789"
+          SourceSecurityGroupId: !GetAtt SourceSecurityGroup.GroupId
+
+####Create one Traffic Mirror Source Instance, and one Target Intance with Suricata#####
+
+  SourceInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: c5.large
+      ImageId:
+        Fn::FindInMap:
+          - RegionMap
+          - !Ref AWS::Region
+          - "64"
+      KeyName: !Ref KeyName
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: "true"
+          DeviceIndex: "0"
+          GroupSet:
+            - !Ref SourceSecurityGroup
+          SubnetId:
+            Ref: Subnet
+      Tags:
+        - Key: Name
+          Value: TrafficMirror-Source
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          apt-get update -y
+          apt-get install nginx -y
+          service nginx start
+
+  TargetInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: c5.large
+      IamInstanceProfile: !Ref TargetInstanceProfile
+      ImageId:
+        Fn::FindInMap:
+          - RegionMap
+          - !Ref AWS::Region
+          - "64"
+      KeyName: !Ref KeyName
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: "true"
+          DeviceIndex: "0"
+          GroupSet:
+            - !Ref TargetSecurityGroup
+          SubnetId:
+            Ref: Subnet
+      Tags:
+        - Key: Name
+          Value: TrafficMirror-Target
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          add-apt-repository ppa:oisf/suricata-stable -y
+          apt-get update -y
+          apt-get install suricata -y
+          wget -q https://vpc-traffic-mirror-demo.s3-ap-northeast-1.amazonaws.com/suricata.yaml
+          cp suricata.yaml /etc/suricata/suricata.yaml
+          suricata-update
+          service suricata restart
+          apt-get install openjdk-8-jdk -y
+          apt-get install git -y
+          git clone https://github.com/awslabs/amazon-kinesis-agent.git
+          cd amazon-kinesis-agent
+          ./setup --install
+          cd ..
+          apt-get install jq -y
+          region=$(curl -s http://169.254.169.254/latest/dynamic/instance-identity/document | jq -r .region)
+          cat <<EOF > agent.json
+          {
+            "cloudwatch.emitMetrics": true,
+            "cloudwatch.endpoint": "https://monitoring.$region.amazonaws.com",
+            "kinesis.endpoint": "",
+            "firehose.endpoint": "https://firehose.$region.amazonaws.com",
+            "flows": [
+              {
+                "filePattern": "/var/log/suricata/eve.json",
+                "deliveryStream": "trafficmirror"
+              }
+            ]
+          }
+          EOF
+          cp agent.json /etc/aws-kinesis/agent.json
+          service aws-kinesis-agent restart          
+
+  TargetInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - ec2.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+      Policies:
+      - PolicyName: TrafficMirror-PutFirehose
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - firehose:PutRecord
+            - firehose:PutRecordBatch
+            Resource: !Sub 'arn:aws:firehose:${AWS::Region}:${AWS::AccountId}:deliverystream/*'
+      - PolicyName: TrafficMirror-PutMetricData
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - cloudwatch:PutMetricData
+            Resource: '*'
+
+
+  TargetInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName:
+        Fn::Join:
+          - "-"
+          - [!Ref ResourceName, "Target"]
+      Path: /
+      Roles:
+        - !Ref TargetInstanceRole
+
+#### Create Traffic Mirror Target, Filter, and Session #####
+
+  CustomResourceLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+      Policies:
+      - PolicyName: CustomResourceLambda
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Resource: 'arn:aws:logs:*:*:*'
+      - PolicyName: CustomResourceLambdaEC2
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - ec2:DescribeInstances
+            Resource: '*'
+
+  getENIFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        S3Bucket: !Sub vpc-traffic-mirror-demo-${AWS::Region}-699962710372
+        S3Key: getENI.zip
+      Handler: lambda_function.lambda_handler
+      Runtime: python3.8
+      Timeout: 30
+      Role: !GetAtt CustomResourceLambdaRole.Arn
+
+
+
+  getENISource:
+    Type: "Custom::getENI"
+    Properties:
+      ServiceToken: !GetAtt getENIFunction.Arn
+      InstanceId: !Ref SourceInstance
+
+  getENITarget:
+    Type: "Custom::getENI"
+    Properties:
+      ServiceToken: !GetAtt getENIFunction.Arn
+      InstanceId: !Ref TargetInstance
+
+  TrafficMirrorTarget:
+    Type: AWS::EC2::TrafficMirrorTarget
+    Properties: 
+      Description: Traffic Mirror Target Instance
+      NetworkInterfaceId: !GetAtt getENITarget.ENI
+      Tags:
+      - Key: Name
+        Value: TrafficMirror-Target
+
+  TrafficMirrorFilter:
+    Type: "AWS::EC2::TrafficMirrorFilter"
+    Properties:
+      Description: "Sample traffic mirror filter"
+      NetworkServices:
+        - "amazon-dns"
+      Tags:
+      - Key: "Name"
+        Value: "TrafficMirrorFilter-Sample"
+
+  TrafficMirrorFilterRuleIngress:
+    Type: "AWS::EC2::TrafficMirrorFilterRule"
+    Properties:
+      Description: "Ingress traffic mirror filter rule"
+      TrafficMirrorFilterId: !Ref TrafficMirrorFilter
+      TrafficDirection: "ingress"
+      RuleNumber: 10
+      DestinationCidrBlock: "0.0.0.0/0"
+      SourceCidrBlock: "0.0.0.0/0"
+      RuleAction: "accept"
+      # Protocol: 6
+  
+  TrafficMirrorFilterRuleEgress:
+    Type: "AWS::EC2::TrafficMirrorFilterRule"
+    Properties:
+      Description: "Egress traffic mirror filter rule"
+      TrafficMirrorFilterId: !Ref TrafficMirrorFilter
+      TrafficDirection: "egress"
+      RuleNumber: 10
+      DestinationCidrBlock: "0.0.0.0/0"
+      SourceCidrBlock: "0.0.0.0/0"
+      RuleAction: "accept"
+      #Protocol: 6
+
+  TrafficMirrorSession:
+    Type: AWS::EC2::TrafficMirrorSession
+    Properties: 
+      Description: TrafficMirrorSession-SuricataSample
+      NetworkInterfaceId: !GetAtt getENISource.ENI
+      # PacketLength: Integer
+      SessionNumber: 10
+      Tags: 
+      - Key: "Name"
+        Value: "TrafficMirrorSession-SuricataSample"
+      TrafficMirrorFilterId: !Ref TrafficMirrorFilter
+      TrafficMirrorTargetId: !Ref TrafficMirrorTarget
+      # VirtualNetworkId: Integer
+
+#### Create Kinesis Firehose Delivery Stream in VPC #####
+
+  ElasticSearchDeliveryStream: 
+    Type: AWS::KinesisFirehose::DeliveryStream
+    Properties: 
+       DeliveryStreamName: trafficmirror
+       DeliveryStreamType: DirectPut
+       ElasticsearchDestinationConfiguration: 
+          BufferingHints: 
+             IntervalInSeconds: 60
+             SizeInMBs: 5
+          # CloudWatchLoggingOptions: 
+          #    Enabled: true
+          #    LogGroupName: "TrafficMirrorFirehose"
+          #    LogStreamName: "elasticsearchDelivery"
+          DomainARN: !GetAtt ElasticsearchDomain.Arn
+          IndexName: "suricata"
+          IndexRotationPeriod: "OneDay"
+          #TypeName: "fromFirehose"
+          RetryOptions: 
+             DurationInSeconds: "300"
+          RoleARN: !GetAtt FirehoseESdeliveryRole.Arn
+          S3BackupMode: FailedDocumentsOnly
+          S3Configuration: 
+             BucketARN: !Sub 'arn:aws:s3:::${FirehoseBackupBucket}'
+             # BufferingHints: 
+                # IntervalInSeconds: "60"
+                # SizeInMBs: "50"
+             CompressionFormat: UNCOMPRESSED
+             Prefix: "TrafficMirror/"
+             RoleARN: !GetAtt FirehoseESdeliveryRole.Arn
+          VpcConfiguration:
+            RoleARN: !GetAtt FirehoseESdeliveryRole.Arn
+            SecurityGroupIds: 
+              - !Ref ESSecurityGroup
+            SubnetIds: 
+              - !Ref Subnet
+              - !Ref Subnet1
+
+  FirehoseBackupBucket:
+    Type: "AWS::S3::Bucket"
+    Properties:
+      BucketName:
+        Fn::Join:
+          - "-"
+          - ["trafficmirror-sample", !Ref "AWS::AccountId", !Ref "AWS::Region"]
+
+  FirehoseESdeliveryRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - firehose.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+      Policies:
+      - PolicyName: Firehose-To-ES
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - s3:AbortMultipartUpload
+            - s3:GetBucketLocation
+            - s3:GetObject
+            - s3:ListBucket
+            - s3:ListBucketMultipartUploads
+            - s3:PutObject
+            Resource: 
+            - "*"
+          - Effect: Allow
+            Action:
+            - lambda:InvokeFunction
+            - lambda:GetFunctionConfiguration
+            Resource: 
+            - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:%FIREHOSE_DEFAULT_FUNCTION%:%FIREHOSE_DEFAULT_VERSION%"
+          - Effect: Allow
+            Action:
+            - es:DescribeElasticsearchDomain
+            - es:DescribeElasticsearchDomains
+            - es:DescribeElasticsearchDomainConfig
+            - es:ESHttpPost
+            - es:ESHttpPut
+            - es:ESHttpGet
+            Resource: 
+            - !Sub "arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/trafficmirror"
+            - !Sub "arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/trafficmirror/*"
+          - Effect: Allow
+            Action:
+            - kinesis:DescribeStream
+            - kinesis:GetShardIterator
+            - kinesis:GetRecords
+            - kinesis:ListShards
+            Resource: 
+            - !Sub "arn:aws:kinesis:${AWS::Region}:${AWS::AccountId}:stream/%FIREHOSE_STREAM_NAME%"
+          - Effect: Allow
+            Action:
+            - logs:PutLogEvents
+            - logs:CreateLogStream
+            - logs:CreateLogGroup
+            Resource: 
+            - "*"
+          - Effect: Allow
+            Action:
+            - ec2:DescribeVpcs
+            - ec2:DescribeVpcAttribute
+            - ec2:DescribeSubnets
+            - ec2:DescribeSecurityGroups
+            - ec2:DescribeNetworkInterfaces
+            - ec2:CreateNetworkInterface
+            - ec2:CreateNetworkInterfacePermission
+            - ec2:DeleteNetworkInterface
+            Resource: 
+            - "*"
+
+#### Create Elasticsearch Domain in VPC #####
+  ElasticsearchDomain:
+    Type: AWS::Elasticsearch::Domain
+    Properties:
+      DomainName: trafficmirror
+      ElasticsearchVersion: 7.4
+      ElasticsearchClusterConfig:
+        InstanceCount: '2'
+        InstanceType: r5.large.elasticsearch
+        ZoneAwarenessEnabled: true
+        ZoneAwarenessConfig: 
+           AvailabilityZoneCount: 2
+      EBSOptions:
+        EBSEnabled: 'true'
+        #Iops: 0
+        VolumeSize: 20
+        VolumeType: gp2
+      SnapshotOptions:
+        AutomatedSnapshotStartHour: '0'
+      AccessPolicies:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: '*'
+            Action: 'es:*'
+            Resource: !Sub "arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/trafficmirror/*"
+      # AdvancedOptions:
+      #   rest.action.multi.allow_explicit_index: 'true'
+      # LogPublishingOptions:
+      #   SEARCH_SLOW_LOGS:
+      #     CloudWatchLogsLogGroupArn: arn:aws:logs:us-east-1:123456789012:log-group:/aws/aes/domains/es-slow-logs
+      #     Enabled: 'true'
+      #   INDEX_SLOW_LOGS:
+      #     CloudWatchLogsLogGroupArn: arn:aws:logs:us-east-1:123456789012:log-group:/aws/aes/domains/es-index-slow-logs
+      #     Enabled: 'true'
+      # Tags:
+      #   - Key: foo
+      #     Value: bar
+      VPCOptions:
+        SubnetIds:
+          - !Ref Subnet
+          - !Ref Subnet1
+        SecurityGroupIds:
+          - !Ref ESSecurityGroup
+
+  ESSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ElasticsearchSecurityGroup
+      VpcId: !Ref VPC
+      GroupName: ElasticsearchSecurityGroup
+      SecurityGroupIngress:
+        - FromPort: '443'
+          IpProtocol: tcp
+          ToPort: '443'
+          CidrIp: 0.0.0.0/0
+
+
+Outputs:
+  KibanaURL:
+    Description: TrafficMirror Source IP Address
+    Value: https://localhost:9200/_plugin/kibana/
+  TargetInstance:
+    Description: TrafficMirror Target IP Address
+    Value: !GetAtt TargetInstance.PublicIp
+  SSLTunnelforKibanaAccess:
+    Description: Setup SSH tunnel to access Kibana URL in VPC
+    Value: !Sub "ssh -i your-key.pem ubuntu@${TargetInstance.PublicIp} -N -L 9200:${ElasticsearchDomain.DomainEndpoint}:443"
+  DomainEndpoint:
+    Description: Elasticsearch Domain Endpoint
+    Value: !GetAtt ElasticsearchDomain.DomainEndpoint
+
+
